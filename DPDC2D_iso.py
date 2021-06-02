@@ -48,9 +48,9 @@ class InputParams():
         params = dict(outpath = output['out_path'],
                       outdir = output['out_dir'],
                       DEM = DEM_params['dem_tiff'],
-                      total_time = np.int(sim_params['total_time']),
-                      num_vents = np.int(sim_params['num_vents']),
-                      num_frames = np.int(sim_params['num_frames']),
+                      totaltime = np.int(sim_params['total_time']),
+                      numvents = np.int(sim_params['num_vents']),
+                      numframes = np.int(sim_params['num_frames']),
                       timestep = np.float(sim_params['timestep']),
                       cstable = np.float(sim_params['cstable']),
                       maxstep = np.float(sim_params['maxstep']),
@@ -70,11 +70,11 @@ class InputParams():
                       C_s = np.float(volc_params['C_solid']),
                       d50 = np.float(volc_params['d50']),
                       Cd = np.float(volc_params['Cd']),
-                      pile_ht = np.float(volc_params['height']),
+                      height = np.float(volc_params['height']),
                       centerXgeo = str(volc_params['centerXgeo']),
                       centerYgeo = str(volc_params['centerYgeo']),
-                      vmag = np.float(volc_params['velocity']),
-                      vdir = np.deg2rad(np.float(volc_params['direction'])))
+                      velocity = np.float(volc_params['velocity']),
+                      direction = np.deg2rad(np.float(volc_params['direction'])))
                       
 
         params['hfilm'] = 1e-5
@@ -86,12 +86,10 @@ class RasterGrid():
     def __init__(self, DEMfile):
 
         ds = rasterio.open(DEMfile)
-        self.hight = ds.height
-        self.width = ds.width
+        self.ny = ds.height
+        self.nx = ds.width
         self.crs = ds.crs
         self.transform = ds.transform
-        self.dx = ds.transform[0]
-        self.dy = ds.transform[4]
         self.elev = ds.read(1)
         ds.close()
         
@@ -100,8 +98,8 @@ class RasterGrid():
             arr[np.abs(arr)<minvalue] = nodata
 
         outds = rasterio.open(outfile, 'w', driver='GTiff', 
-                          height = self.height, 
-                          width = self.width, 
+                          height = self.ny, 
+                          width = self.nx, 
                           count=count, 
                           crs = self.crs, 
                           dtype = arr.dtype,
@@ -119,16 +117,16 @@ class RasterGrid():
 
 class DiluteCurrentModel():
     
-    def __init__(self, inparams):
+    def __init__(self, inparams, grid):
         # # Setting model parameters
-        self.tsim = inparams['total_time']
+        self.tsim = inparams['totaltime']
         self.dt = inparams['timestep']
         self.cstable = inparams['cstable']
         self.maxdt = inparams['maxstep']
         self.mindt = inparams['minstep']
         self.order = inparams['order']
         
-        self.numframes = inparams['num_frames']
+        self.numframes = inparams['numframes']
         
         self.hfilm = inparams['hfilm']
         
@@ -153,13 +151,19 @@ class DiluteCurrentModel():
         self.d50 = inparams['d50']
         self.Cdrag = inparams['Cd']
         
-        self.h = inparams['height']
-        self.vel = inparams['velocity']
-        self.dir = inparams['direction']
-        self.nx = grid.width
-        self.ny = grid.height
-        self.dx = grid.dx
+        self.hinit = inparams['height']
+        self.velocity = inparams['velocity']
+        self.direction = inparams['direction']
+        self.grid = grid
+        self.nx = grid.nx
+        self.ny = grid.ny
+        self.dx = grid.transform[0]
+        self.dy = grid.transform[4]
         self.topo = grid.elev
+        
+        self.centerXgeo = np.array(inparams['centerXgeo'].split(','), dtype=np.float32)
+        self.centerYgeo = np.array(inparams['centerYgeo'].split(','), dtype=np.float32)
+        self.centerX, self.centerY, self.numcells = self.set_domain()
         
         # # Initializing fields
         # # Need to add stuff for thermal and density
@@ -185,9 +189,9 @@ class DiluteCurrentModel():
         
         self.maxvel = np.zeros((self.ny, self.nx), dtype = np.float64)
         self.maxdepth = np.zeros((self.ny, self.nx), dtype = np.float64)
-        
+                
         # # Output files
-        self.outfiles_dir = self.set_output_directory(inparams['out_path'], inparams['out_dir'])
+        self.outfiles_dir = self.set_output_directory(inparams['outpath'], inparams['outdir'])
         
     def set_output_directory(self, path, newdir):
         outpath = Path(path) / newdir
@@ -232,29 +236,41 @@ class DiluteCurrentModel():
             vely=self.vely
         return np.sqrt(velx**2 + vely**2)
     
+    def set_domain(self):
+        
+        px = np.zeros((1, len(self.centerXgeo)), dtype=int)
+        py = np.zeros((1, len(self.centerYgeo)), dtype=int)
+        
+        for i in range(len(self.centerXgeo)):
+            px[0,i] = int((self.centerXgeo[i] - self.grid.transform[2])//self.dx)
+            py[0,i] = int((self.centerYgeo[i] - self.grid.transform[5])//self.dy)
+        coords = np.transpose(np.concatenate((px, py), axis=0))
+        coords_uniq = np.unique(coords, axis = 0)
+        return coords_uniq[:,0], coords_uniq[:,1], coords_uniq.shape[0]
     
     def set_initial_cond(self):
         # # Recalculating air density based on pre layer thickness h_film
         self.rho_a = self.hfilm * self.rho_s + (1-self.hfilm) * self.rho_a
         
         ### Intitalizing conservative variables ######################
-          
-        for i in range(len(Flow['centerX'])):
-            self.h[Flow['centerY'][i], Flow['centerX'][i]] = self.height
+                  
+        for i in range(len(self.centerX)):
+            self.h[self.centerY[i], self.centerX[i]] = self.hinit
 #             self.h_dep = self.h
-            self.rho[Flow['centerY'][i], Flow['centerX'][i]] =  self.phi_s0*self.rho_s + (1-self.phi_s0)*self.rho_g
-            self.phi_s[Flow['centerY'][i], Flow['centerX'][i]] =  phi_s
-            self.mass[Flow['centerY'][i], Flow['centerX'][i]] = self.rho * self.height
-            self.velx[Flow['centerY'][i], Flow['centerX'][i]] = self.velocity * np.cos(self.dir)
-            self.vely[Flow['centerY'][i], Flow['centerX'][i]] = self.velocity * np.sin(self.dir)
-            self.vel[Flow['centerY'][i], Flow['centerX'][i]] = self.velocity
+            self.rho[self.centerY[i], self.centerX[i]] =  self.phi_s0*self.rho_s + (1-self.phi_s0)*self.rho_g
+            self.phi_s[self.centerY[i], self.centerX[i]] = self.phi_s0
+            self.mass[self.centerY[i], self.centerX[i]] = self.rho[self.centerY[i], self.centerX[i]] * self.hinit
+            
+            self.velx[self.centerY[i], self.centerX[i]] = self.velocity * np.cos(self.direction)
+            self.vely[self.centerY[i], self.centerX[i]] = self.velocity * np.sin(self.direction)
+            self.vel[self.centerY[i], self.centerX[i]] = self.velocity
 
             
         self.momx = self.mass * self.velx
         self.momy = self.mass * self.vely
         
-        self.topo, self.h, self.mass, self.momx, self.momy, self.rho, self.phi_s, self.velx, self.vely, self.vel, self.maxvel, self.maxdepth = \
-        self.make_ghostcells([self.topo, self.h, self.mass, self.momx, self.momy, self.rho, self.phi_s, self.velx, self.vely, self.vel, self.maxvel, self.maxdepth])
+        self.topo, self.h, self.h_dep, self.mass, self.momx, self.momy, self.rho, self.phi_s, self.velx, self.vely, self.vel, self.maxvel, self.maxdepth = \
+        self.make_ghostcells([self.topo, self.h, self.h_dep, self.mass, self.momx, self.momy, self.rho, self.phi_s, self.velx, self.vely, self.vel, self.maxvel, self.maxdepth], 0)
             
         self.u = np.array([self.h, self.mass, self.momx, self.momy])
 
@@ -347,7 +363,7 @@ class DiluteCurrentModel():
             self.vely[-1,:] = self.vely[-2,:]
             
             
-    def compute_fluxes(self, u, direction, ul, ur, vl, vr, S_xy, g_z, Smaxtemp, tflux):
+    def compute_fluxes(self,direction, ul, ur, vl, vr, S_xy, g_z, Smaxtemp, tflux):
     
         ulr = self.MUSCLextrap(direction)                  # ulr shape is nn x 2
         [Smaxtemp, tflux, hstar, ustar] = self.hllc(ulr, ul, ur, vl, vr, S_xy, g_z, direction, Smaxtemp, tflux)
@@ -394,15 +410,15 @@ class DiluteCurrentModel():
             buhr = ulr [1,2,:,:].copy()
             bvhl = ulr [0,3,:,:].copy()
             bvhr = ulr [1,3,:,:].copy()
-            mx = nx-1
-            my = ny
+            mx = self.nx-1
+            my = self.ny
         elif direction == 'y':
             bvhl = ulr [0,2,:,:].copy() 
             bvhr = ulr [1,2,:,:].copy()
             buhl = ulr [0,3,:,:].copy()
             buhr = ulr [1,3,:,:].copy()
-            mx = nx
-            my = ny-1
+            mx = self.nx
+            my = self.ny-1
 
 
         hstar = np.zeros((my,mx), dtype = np.float64)
@@ -433,15 +449,14 @@ class DiluteCurrentModel():
 
         #### wave speeds ###################
         Sl, Sm, Sr = self.wave_speeds(ul, hl, hl_noflow, ur, hr, hr_noflow, ustar, hstar, g_z, Sl, Sm, Sr)
-        
-        
+
         ### Fluxes #############################
         cond_l = Sl >= 0
         cond_m = (Sl < 0) & (Sr > 0)
         cond_r = Sr <= 0
         
         tflux_buhl = (hl[cond_l] * -self.rho_a * g_z[cond_l] * hl[cond_l]) + (bhl[cond_l] * (-ul[cond_l] ** 2 + 0.5 * g_z[cond_l] * hl[cond_l])) + (buhl[cond_l]  * 2*ul[cond_l])
-        tflux_buhl = (hr[cond_r] * -self.rho_a * g_z[cond_r] * hr[cond_r]) + (bhr[cond_r] * (-ur[cond_r] ** 2 + 0.5 * g_z[cond_r] * hr[cond_r])) + (buhr[cond_r]  * 2*ur[cond_r])
+        tflux_buhr = (hr[cond_r] * -self.rho_a * g_z[cond_r] * hr[cond_r]) + (bhr[cond_r] * (-ur[cond_r] ** 2 + 0.5 * g_z[cond_r] * hr[cond_r])) + (buhr[cond_r]  * 2*ur[cond_r])
         
         tflux[0,:,:][cond_l] = hl[cond_l] * ul[cond_l]
         tflux[1,:,:][cond_l] = buhl[cond_l] 
@@ -449,7 +464,9 @@ class DiluteCurrentModel():
         
         tflux[0,:,:][cond_m] = (Sr[cond_m]*(hl[cond_m]*ul[cond_m]) - Sl[cond_m]*(hr[cond_m]*ur[cond_m]) + Sl[cond_m]*Sr[cond_m]*(hr[cond_m]-hl[cond_m])) / (Sr[cond_m]-Sl[cond_m])
         tflux[1,:,:][cond_m] = (Sr[cond_m]*(buhl[cond_m]) - Sl[cond_m]*(buhr[cond_m]) + Sl[cond_m]*Sr[cond_m]*(bhr[cond_m]-bhl[cond_m])) / (Sr[cond_m]-Sl[cond_m])
-        tflux[2,:,:][cond_m] = (Sr[cond_m]*tflux_buhl - Sl[cond_m]*tflux_buhr + Sl[cond_m]*Sr[cond_m]*(buhr[cond_m] - buhl[cond_m])) / (Sr[cond_m]-Sl[cond_m])
+        tflux[2,:,:][cond_m] = (Sr[cond_m]*(hl[cond_m] * -self.rho_a * g_z[cond_m] * hl[cond_m]) + (bhl[cond_m] * (-ul[cond_m] ** 2 + 0.5 * g_z[cond_m] * hl[cond_m])) + (buhl[cond_m]  * 2*ul[cond_m]) - \
+                                Sl[cond_m]*(hr[cond_m] * -self.rho_a * g_z[cond_m] * hr[cond_m]) + (bhr[cond_m] * (-ur[cond_m] ** 2 + 0.5 * g_z[cond_m] * hr[cond_m])) + (buhr[cond_m]  * 2*ur[cond_m]) \
+                                + Sl[cond_m]*Sr[cond_m]*(buhr[cond_m] - buhl[cond_m])) / (Sr[cond_m]-Sl[cond_m])
 
         tflux[0,:,:][cond_r] = hr[cond_r] * ur[cond_r]
         tflux[1,:,:][cond_r] = buhr[cond_r] 
@@ -462,7 +479,8 @@ class DiluteCurrentModel():
 
 
         ### Maximum wave speeds for stability criteria #####
-        Smaxtemp = np.maximum(np.absolute(Sl),np.absolute(Sr), np.absolute(Sm))        
+#         Smaxtemp = np.maximum(np.absolute(Sl),np.absolute(Sr), np.absolute(Sm))                             # # gives nan values
+        Smaxtemp = max(np.nanmax(np.absolute(Sl)),np.nanmax(np.absolute(Sr)), np.nanmax(np.absolute(Sm)) )    # # getting rid of non values (ADDRESS: why nan; is this right)
         return Smaxtemp, tflux, hstar, ustar
 
     def MUSCLextrap(self, direction):
@@ -481,16 +499,17 @@ class DiluteCurrentModel():
 
         return np.array([val, valplus])
 
-    def adaptive_timestep(self, time, Smax):
+    def adaptive_timestep(self, currtime, Smax):
+        
         self.dt = self.cstable * self.dx / Smax
 
         if self.dt > self.maxdt:
             self.dt = self.maxdt
-        if self.tsim+self.dt > self.tsim:
-            self.dt = self.tsim - time
-        courant = Smax * self.dt / dx
+        if currtime+self.dt > self.tsim:
+            self.dt = self.tsim - currtime
+        courant = Smax * self.dt / self.dx
 
-        return self.dt, courant 
+        return courant 
     
     def gravity_term(self, dir):
         if dir == 'x':
@@ -500,7 +519,7 @@ class DiluteCurrentModel():
         
     def settling_term(self):
         
-        ws = np.sqrt((4 * (self.rho_s - self.rho) * self.g * self.d50) / (3 * self.Cd * self.rho))
+        ws = np.sqrt((4 * (self.rho_s - self.rho) * self.g * self.d50) / (3 * self.Cdrag * self.rho))
         # # add velocity while using for the momentum equations
         
         return self.rho_s * ws * self.phi_s
@@ -508,9 +527,9 @@ class DiluteCurrentModel():
         
     def drag_term(self, dir):
         if dir == 'x':
-            return - self.Cd * self.rho * self.velx ** 2
+            return - self.Cdrag * self.rho * self.velx ** 2
         elif dir == 'y':
-            return self.Cd * self.rho * self.vely ** 2
+            return self.Cdrag * self.rho * self.vely ** 2
         
     def update_CV(self, CV, fluxx, fluxy, sourceterm=0):
         oneoverdx = 1/self.dx
@@ -614,23 +633,23 @@ class DiluteCurrentModel():
     
     def create_output_files(self):
         #### Final results as binary files #########
-        grid.write_tiff(self.u[0,1:-1,1:-1], self.outfiles_dir+"Depth.tif", -9999, 1, .001)
-        grid.write_tiff(self.u[1,1:-1,1:-1], self.outfiles_dir+"Mass.tif", 0, 1, 0)
-        grid.write_tiff(self.u[2,1:-1,1:-1], self.outfiles_dir+"MomentumX.tif", 0, 1, 0)
-        grid.write_tiff(self.u[3,1:-1,1:-1], self.outfiles_dir+"MomentumY.tif", 0, 1, 0)
-        grid.write_tiff(self.h_dep[1:-1,1:-1], self.outfiles_dir+"Deposit_depth.tif", -9999, 1, .001)
-        grid.write_tiff(self.vel[1:-1,1:-1], self.outfiles_dir+"Velocity.tif", 0, 1, .001)
-        grid.write_tiff(self.maxdepth[1:-1,1:-1], outdir+"MaxDepth.tif", -9999, 1, 1e-5)
-        grid.write_tiff(self.maxvel[1:-1,1:-1], outdir+"MaxVelocity.tif", 0, 1)
+        self.grid.write_tiff(self.u[0,1:-1,1:-1], self.outfiles_dir+"Depth.tif", -9999, 1, .001)
+        self.grid.write_tiff(self.u[1,1:-1,1:-1], self.outfiles_dir+"Mass.tif", 0, 1, 0)
+        self.grid.write_tiff(self.u[2,1:-1,1:-1], self.outfiles_dir+"MomentumX.tif", 0, 1, 0)
+        self.grid.write_tiff(self.u[3,1:-1,1:-1], self.outfiles_dir+"MomentumY.tif", 0, 1, 0)
+        self.grid.write_tiff(self.h_dep[1:-1,1:-1], self.outfiles_dir+"Deposit_depth.tif", -9999, 1, .001)
+        self.grid.write_tiff(self.vel[1:-1,1:-1], self.outfiles_dir+"Velocity.tif", 0, 1, .001)
+        self.grid.write_tiff(self.maxdepth[1:-1,1:-1], self.outfiles_dir+"MaxDepth.tif", -9999, 1, 1e-5)
+        self.grid.write_tiff(self.maxvel[1:-1,1:-1], self.outfiles_dir+"MaxVelocity.tif", 0, 1)
 
 
         #### Final results as movie files #########
-        grid.write_tiff(self.movie_h, self.outfiles_dir+"DepthMovie.tif", -9999, self.numframes, .001)
-        grid.write_tiff(self.movie_momx, self.outfiles_dir+"MomentumXMovie.tif", 0, self.numframes, 0)
-        grid.write_tiff(self.movie_momy, self.outfiles_dir+"MomentumYMovie.tif", 0, self.numframes, 0)
+        self.grid.write_tiff(self.movie_h, self.outfiles_dir+"DepthMovie.tif", -9999, self.numframes, .001)
+        self.grid.write_tiff(self.movie_momx, self.outfiles_dir+"MomentumXMovie.tif", 0, self.numframes, 0)
+        self.grid.write_tiff(self.movie_momy, self.outfiles_dir+"MomentumYMovie.tif", 0, self.numframes, 0)
 #         grid.write_tiff(self.movie_velx, self.outfiles_dir+"VelocityXMovie.tif", 0, self.numframes, .001)
 #         grid.write_tiff(self.movie_vely, self.outfiles_dir+"VelocityYMovie.tif", 0, self.numframes, .001)
-        grid.write_tiff(self.movie_vel, self.outfiles_dir+"VelocityMovie.tif", 0, self.numframes, .001)
+        self.grid.write_tiff(self.movie_vel, self.outfiles_dir+"VelocityMovie.tif", 0, self.numframes, .001)
         
         # # ADDRESS: REWRITE FOR DEPOSIT THICKNESS
 
@@ -660,19 +679,23 @@ class DiluteCurrentModel():
 
         t = 0
         while t < self.tsim:
+            print(t)
             self.update_boundary_cond()
 
             Smax = 0
 
             # # Flux in X-direction 
-            [Smaxtemp, tfluxx, hstarx, ustarx] = self.compute_fluxes(u, 'x', ulx, urx, vlx, vrx, S_x, self.gz[:,:-1], Smaxtemp, tfluxx)
+            [Smaxtemp, tfluxx, hstarx, ustarx] = self.compute_fluxes('x', ulx, urx, vlx, vrx, S_x, self.gz[:,:-1], Smaxtemp, tfluxx)
             Smax = max(Smax, np.max(Smaxtemp))
+            print("Smaxtemp = ", np.max(Smaxtemp))
+            
             # # Flux in Y-direction 
-            [Smaxtemp, tfluxy, hstary, ustary] = self.compute_fluxes(u, 'y', vly, vry, uly, ury, S_y, self.gz[:-1,:], Smaxtemp, tfluxy)
+            [Smaxtemp, tfluxy, hstary, ustary] = self.compute_fluxes('y', vly, vry, uly, ury, S_y, self.gz[:-1,:], Smaxtemp, tfluxy)
             Smax = max(Smax, np.max(Smaxtemp))
+            print("Smaxtemp = ", np.max(Smaxtemp))
 
             # # Adaptive time step 
-            self.dt, courant = self.adaptive_timestep(t, Smax)   
+            courant = self.adaptive_timestep(t, Smax)   
             if courant > 1:
                 print("CFL error at t = ", t)
                 t = 2 * self.tsim
@@ -683,16 +706,18 @@ class DiluteCurrentModel():
             betay = self.gravity_term('y') - self.settling_term()*self.vely - self.drag_term('y')
 
             # # Time update
-            u[0,1:-1,1:-1] = self.update_CV(u[0,1:-1,1:-1], Simulation['dt'], dx, tfluxx[0,1:-1,:], tfluxy[0,:,1:-1])
-            u[1,1:-1,1:-1] = self.update_CV(u[1,1:-1,1:-1], Simulation['dt'], dx, tfluxx[1,1:-1,:], tfluxy[1,:,1:-1], sx[1:-1,1:-1], - self.settling_term()[1:-1,1:-1])
-            u[2,1:-1,1:-1] = self.update_CV(u[2,1:-1,1:-1], Simulation['dt'], dx, tfluxx[2,1:-1,:], tfluxy[3,:,1:-1], sx[1:-1,1:-1], betax[1:-1,1:-1])
-            u[3,1:-1,1:-1] = self.update_CV(u[3,1:-1,1:-1], Simulation['dt'], dx, tfluxx[3,1:-1,:], tfluxy[2,:,1:-1], sy[1:-1,1:-1], betay[1:-1,1:-1])
-            maxdepth, maxvel = self.output_variables(self, maxdepth, maxvel)
+            self.u[0,1:-1,1:-1] = self.update_CV(self.u[0,1:-1,1:-1], tfluxx[0,1:-1,:], tfluxy[0,:,1:-1])
+            self.u[1,1:-1,1:-1] = self.update_CV(self.u[1,1:-1,1:-1], tfluxx[1,1:-1,:], tfluxy[1,:,1:-1], - self.settling_term()[1:-1,1:-1])
+            self.u[2,1:-1,1:-1] = self.update_CV(self.u[2,1:-1,1:-1], tfluxx[2,1:-1,:], tfluxy[3,:,1:-1], betax[1:-1,1:-1])
+            self.u[3,1:-1,1:-1] = self.update_CV(self.u[3,1:-1,1:-1], tfluxx[3,1:-1,:], tfluxy[2,:,1:-1], betay[1:-1,1:-1])
+            
+            # # ADDRESS: referenced before assignment
+#             maxdepth, maxvel = self.output_variables(self, maxdepth, maxvel)
             
             # # deposit thickness
             # # ADDRESS: should the thickness be calculated based on density condition or hfilm condition
             current_cond = self.rho>self.rho_a
-            self.h_dep[current_cond] = self.h_dep - self.dt* (self.settling_term() / self.rho_dep)
+            self.h_dep[current_cond] = self.h_dep[current_cond] - self.dt* (self.settling_term()[current_cond] / self.rho_dep)
             
             # # liftoff condition
             self.check_liftoff()
@@ -700,7 +725,8 @@ class DiluteCurrentModel():
  
             # # Movie array update 
             if t >= printat:
-                print(t, courant, Simulation['dt'])
+                print("Time      Courant      Timestep")
+                print(t, courant, self.dt)
                 printat += self.tsim / self.numframes
                 self.update_output_movies()
                 movie_idx += 1
