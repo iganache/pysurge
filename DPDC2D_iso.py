@@ -61,7 +61,6 @@ class InputParams():
                       mu_air = np.float(atmo_params['mu_air']),
                       Cp_air = np.float(atmo_params['Cp_air']),
                       rho_gas = np.float(volc_params['rho_gas']), 
-                      n_gas = np.float(volc_params['n_gas']),
                       mu_gas = np.float(volc_params['mu_gas']),
                       Cp_gas = np.float(volc_params['Cp_gas']),
                       rho_dep = np.float(volc_params['rho_deposit']),
@@ -143,7 +142,7 @@ class DiluteCurrentModel():
         self.rho_dep = inparams['rho_dep']
         
         self.rho_g = inparams['rho_gas']
-        self.phi_g = inparams['n_gas']
+        self.phi_g = 1 - self.phi_s0
         self.mu_g = inparams['mu_gas']
         self.Cp_g = inparams['Cp_gas']
 
@@ -251,6 +250,7 @@ class DiluteCurrentModel():
     def set_initial_cond(self):
         # # Recalculating air density based on pre layer thickness h_film
         self.rho_a = self.hfilm * self.rho_s + (1-self.hfilm) * self.rho_a
+        print("atm dens =", self.rho_a)
         
         ### Intitalizing conservative variables ######################
                   
@@ -258,12 +258,15 @@ class DiluteCurrentModel():
             self.h[self.centerY[i], self.centerX[i]] = self.hinit
 #             self.h_dep = self.h
             self.rho[self.centerY[i], self.centerX[i]] =  self.phi_s0*self.rho_s + (1-self.phi_s0)*self.rho_g
+            print("curr dens =", self.rho[self.centerY[i], self.centerX[i]])
             self.phi_s[self.centerY[i], self.centerX[i]] = self.phi_s0
             self.mass[self.centerY[i], self.centerX[i]] = self.rho[self.centerY[i], self.centerX[i]] * self.hinit
+            print("curr mass = ", self.mass[self.centerY[i], self.centerX[i]])
             
             self.velx[self.centerY[i], self.centerX[i]] = self.velocity * np.cos(self.direction)
             self.vely[self.centerY[i], self.centerX[i]] = self.velocity * np.sin(self.direction)
             self.vel[self.centerY[i], self.centerX[i]] = self.velocity
+            print("curr vel = ", self.vel[self.centerY[i], self.centerX[i]])
 
             
         self.momx = self.mass * self.velx
@@ -522,6 +525,7 @@ class DiluteCurrentModel():
         ws = np.sqrt((4 * (self.rho_s - self.rho) * self.g * self.d50) / (3 * self.Cdrag * self.rho))
         # # add velocity while using for the momentum equations
         
+        # # ADDRESS: should this be solid density or current density
         return self.rho_s * ws * self.phi_s
 
         
