@@ -6,9 +6,9 @@ Created on Fri Feb 12 15:33:21 2021
 @author: indujaa
 """
 import argparse
-from DPDC2D_iso import InputParams
+from DPDC1D_iso import InputParams
 from topo import RasterGrid, NoCRSGrid
-from DPDC2D_iso import DiluteCurrentModel
+from DPDC1D_iso import DiluteCurrentModel
 
 
 def getInput():
