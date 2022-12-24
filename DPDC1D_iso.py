@@ -196,12 +196,15 @@ class DiluteCurrentModel():
         
         # # Recalculating air density based on pre layer thickness h_film
         self.rho_a = self.hfilm * self.rho_s + (1-self.hfilm) * self.rho_a
+        print("air density", self.rho_a)
+        
         self.rho += self.rho_a
 
         for i in range(len(self.centerX)):
             self.h[self.centerX[i]] = self.hinit
 #             self.h_dep = self.h
             self.rho[self.centerX[i]] =  self.phi_s0*self.rho_s + (1-self.phi_s0)*self.rho_g
+            
         
             self.phi_s[self.centerX[i]] = self.phi_s0
             self.phi_s[self.centerX[i]] = self.phi_s0
@@ -210,7 +213,10 @@ class DiluteCurrentModel():
             self.vel[self.centerX[i]] = self.velocity * np.cos(self.direction)
 
         volume = np.abs((len(self.centerX) * self.dx * self.hinit))
-        with open('/home/indujaa/pysurge/volume.txt', 'w') as f:
+        
+        print("density", self.rho)
+        sys.exit()
+        with open('/home/iganesh/pysurge/volume.txt', 'w') as f:
             f.write(str(volume))
             
         self.mom = self.mass * self.vel
@@ -251,22 +257,26 @@ class DiluteCurrentModel():
         self.gx[0] = self.gx[1]
         self.gz[0] = self.gz[1]                      
         self.u[:,0] = self.u[:,1]
+        self.rho[0] = self.rho[1]
         if LeftSolid:
             self.vel[0] = - self.vel[1] 
             self.u[2,0] = - self.u[2,1]
         else:
             self.vel[0] = self.vel[1] 
+             
 
 
         ## Right boundary
         self.gx[-1] = self.gx[-2]
         self.gz[-1] = self.gz[-2]
         self.u[:,-1] = self.u[:,-2]
+        self.rho[-1] = self.rho[-2]
         if RightSolid:
             self.vel[-1] = - self.vel[-2] 
             self.u[2,-1] = - self.u[2,-2]
         else:
             self.vel[-1] = self.vel[-2]  
+            
 
             
     def compute_fluxes(self,direction, ul, ur, S_xy, g_z, Smaxtemp, tflux):
@@ -397,9 +407,9 @@ class DiluteCurrentModel():
         
         ws = np.zeros_like(self.rho)
         ws[cond] = np.sqrt((4 * (self.rho_s - self.rho[cond]) * self.g * self.d50) / (3 * self.Cdrag * self.rho[cond]))
+        # return ws * self.rho_s* self.phi_s
         return  ws * (self.rho - self.rho_g)
 
-        
     def drag_term(self):
 
         return self.fric * self.rho * self.vel * np.abs(self.vel)
@@ -448,6 +458,7 @@ class DiluteCurrentModel():
         self.movie_vel = np.zeros((self.numframes, self.nx), dtype=np.float64)
         self.movie_h_dep = np.zeros((self.numframes, self.nx), dtype=np.float64)
         self.movie_rho = np.zeros((self.numframes, self.nx), dtype=np.float64)
+        self.movie_phi = np.zeros((self.numframes, self.nx), dtype=np.float64)
         
     def update_output_movies(self, idx):
         print(idx)
@@ -457,6 +468,7 @@ class DiluteCurrentModel():
         self.movie_vel[idx,:] = self.vel[1:-1]
         self.movie_h_dep[idx,:] = self.h_dep[1:-1]
         self.movie_rho[idx,:] = self.rho[1:-1]
+        self.movie_phi[idx,:] = self.phi_s[1:-1]
     
     def output_variables(self):
                 
@@ -480,12 +492,17 @@ class DiluteCurrentModel():
         self.u[0,:][surge_liftoff] = self.hfilm
         self.u[1,:][surge_liftoff] = self.rho_a * self.hfilm       
         self.rho = self.u[1,:] / self.u[0,:]
+        # if np.any(self.u[0,:] == np.nan):
+        #     print(self.u[0,:])
+        # print("currentheight = ",  self.u[0,:])
+        # print("density = ", self.rho)
 
         # # momentum terms
         self.u[2,:][surge_liftoff] = 0    
         # # velocity
         self.vel = self.u[2,:] / self.u[1,:]
         self.vel[surge_liftoff] = 0
+        # print("vel =", self.vel)
 
         self.maxvel = np.maximum(self.maxvel, self.vel)
         self.maxdepth = np.maximum(self.maxdepth, self.u[0,:])
@@ -516,23 +533,24 @@ class DiluteCurrentModel():
     
     def create_output_files(self):
         #### Final results as binary files #########
-        self.grid.write_txt1D(self.u[0,1:-1], self.outfiles_dir+"Depth.txt", -9999, 1, self.hfilm)
-        self.grid.write_txt1D(self.u[1,1:-1], self.outfiles_dir+"Mass.txt", -9999, 1, self.rho_a)
-        self.grid.write_txt1D(self.u[2,1:-1], self.outfiles_dir+"MomentumX.txt", -9999, 1, 0)
-        self.grid.write_txt1D(self.h_dep[1:-1], self.outfiles_dir+"Deposit_depth.txt", -9999, 1, self.hfilm)
-        self.grid.write_txt1D(self.rho[1:-1], self.outfiles_dir+"Density.txt", -9999, 1, self.rho_a)
+        self.grid.write_txt1D(self.u[0,1:-1], self.outfiles_dir+"Depth.txt", 1e-5, 1, self.hfilm)
+        self.grid.write_txt1D(self.u[1,1:-1], self.outfiles_dir+"Mass.txt", 0.0006502, 1, self.rho_a)
+        self.grid.write_txt1D(self.u[2,1:-1], self.outfiles_dir+"MomentumX.txt", 0, 1, 0)
+        self.grid.write_txt1D(self.h_dep[1:-1], self.outfiles_dir+"Deposit_depth.txt", 1e-5, 1, self.hfilm)
+        self.grid.write_txt1D(self.rho[1:-1], self.outfiles_dir+"Density.txt", 65.02, 1, self.rho_a)
         self.grid.write_txt1D(self.vel[1:-1], self.outfiles_dir+"Velocity.txt", 0, 1, .001)
-        self.grid.write_txt1D(self.maxdepth[1:-1], self.outfiles_dir+"MaxDepth.txt", -9999, 1, self.hfilm)
+        self.grid.write_txt1D(self.maxdepth[1:-1], self.outfiles_dir+"MaxDepth.txt", 1e-5, 1, self.hfilm)
         self.grid.write_txt1D(self.maxvel[1:-1], self.outfiles_dir+"MaxVelocity.txt", 0, 1)
 
 
         #### Final results as movie files #########
-        self.grid.write_txt1D(self.movie_h, self.outfiles_dir+"DepthMovie.txt", -9999, self.numframes, self.hfilm)
+        self.grid.write_txt1D(self.movie_h, self.outfiles_dir+"DepthMovie.txt", 1e-5, self.numframes, self.hfilm)
 #         self.grid.write_tiff1D(self.movie_momx, self.outfiles_dir+"MomentumXMovie.tif", 0, self.numframes, 0)
 #         self.grid.write_tiff1D(self.movie_momy, self.outfiles_dir+"MomentumYMovie.tif", 0, self.numframes, 0)
         self.grid.write_txt1D(self.movie_vel, self.outfiles_dir+"VelocityXMovie.txt", 0, self.numframes, .001)
-        self.grid.write_txt1D(self.movie_h_dep, self.outfiles_dir+"DepositMovie.txt", -9999, self.numframes, self.hfilm)
-        self.grid.write_txt1D(self.movie_rho, self.outfiles_dir+"DensityMovie.txt", -9999, self.numframes, self.hfilm)
+        self.grid.write_txt1D(self.movie_h_dep, self.outfiles_dir+"DepositMovie.txt", 1e-5, self.numframes, self.hfilm)
+        self.grid.write_txt1D(self.movie_rho, self.outfiles_dir+"DensityMovie.txt", 65.02, self.numframes, self.hfilm)
+        self.grid.write_txt1D(self.movie_phi, self.outfiles_dir+"PhiMovie.txt", 1e-5, self.numframes, self.hfilm)
         
         # # ADDRESS: REWRITE FOR DEPOSIT THICKNESS
 
@@ -561,10 +579,12 @@ class DiluteCurrentModel():
 
         t = 0
         
-#         nsim = 0
-#         while nsim<7:
+        nsim = 0
+        
         
         while t < self.tsim:
+        # while nsim<=100:
+                
             self.update_boundary_cond()
             print("time = ", t)
 
@@ -617,7 +637,7 @@ class DiluteCurrentModel():
                 
 #             ### debugging ###
 #             self.update_output_movies(nsim)
-#             nsim += 1
+            nsim += 1
 #             #################
 
             # # Clear all variables

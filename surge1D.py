@@ -32,7 +32,7 @@ def main():
     
     # # change dem input style
 #     dem = RasterGrid(args.dem)
-    dem = NoCRSGrid(args.dem, 50)
+    dem = NoCRSGrid(args.dem, 20)
     
     dpdc = DiluteCurrentModel(config_params, dem)
     dpdc.run_model()
