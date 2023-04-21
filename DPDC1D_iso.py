@@ -215,7 +215,7 @@ class DiluteCurrentModel():
         volume = np.abs((len(self.centerX) * self.dx * self.hinit))
         
         print("density", self.rho)
-        sys.exit()
+        
         with open('/home/iganesh/pysurge/volume.txt', 'w') as f:
             f.write(str(volume))
             
